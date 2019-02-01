@@ -1,0 +1,178 @@
+---
+title: "ESM 244 Lab 4"
+author: "Tom Paschos"
+date: "1/30/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Lab Week 4:
+
+- Nonlinear least squares
+- Panel regression level 0 example
+- Shiny example with navbarPage
+
+0. Attach Packages
+
+```{r Load_Packages}
+
+library(tidyverse)
+library(Ecdat)
+library(plm)
+library(lmtest)
+library(car)
+
+```
+
+1. Nonlinear least squares (logistic growth of bacteria)
+
+```{r Load_Data}
+
+CellGrowth <- read_csv("CellGrowth.csv")
+
+# Look at it:
+
+ggplot(CellGrowth, aes(x = Time, y = CellCount)) +
+  geom_point()
+
+# Find estimates for logistic gwoth:
+# N =  A/(1+Be^(-rt))
+# 3 parameters: A, B, and r
+
+# Estimate for carrying capacity (K): 3700
+# OK, if N0 is 2000, what is B? ~0.85
+# r initial estimate: ~ 0.1035
+
+BEstimate <- (3700 -2000)/2000
+
+# Looks like there's exponential growth from Hour 0 - Hour 3.5 or 4
+# Now, we're going to estimate r (the growth rate)
+
+lag_phase <- CellGrowth %>% 
+  filter(Time < 5)
+
+ggplot(lag_phase, aes(x = Time, y = log(CellCount))) +
+  geom_point()
+
+
+
+lm(log(CellCount) ~ Time, data = lag_phase)
+# coefficient for t = 0.1035; this is the r value
+
+```
+
+Find model A, B and r using Gauss-Newton method for iterative convergence (nonlinear least squares):
+
+Use the nls() function: 
+
+```{r nls}
+
+# We can use anything for our model structure, making this function flexible.
+# Trying to model the relationship of Cell Count and Time but we need A, B and r
+
+cell_fit <- nls(CellCount ~ A/(1 + B*exp(-r*Time)),
+                start = list(A = 3900, B = 0.85, r = 0.1035),
+                data = CellGrowth,
+                trace = TRUE)
+
+# Gives you a traceback of all the iterations, values on the left column are the square residuals until they stop changing (convergence) at the bottom line
+# The other columns are now your A, B and r values by running the model iteratively
+
+cell_fit
+# This shows us the values for those A, B and r values
+
+A <- coef(cell_fit)[1] # This allows us to call A in case our data changes
+B <- coef(cell_fit)[2]
+r <- coef(cell_fit)[3]
+
+# Create a new sequence of time values (time_seq)
+
+time_seq <- seq(0,20,length = 100) # length = 100 makes 100 observations in the sequence
+
+# Plug that new sequence into my model with the parameters A, B and r that we found:
+
+cell_pred <- A/(1 + B*exp(-r*time_seq))
+
+# Bind that together with the time_seq data:
+
+pred_df <- data.frame(time_seq, cell_pred)
+
+#Graph it with original data and our model predictions:
+ggplot(CellGrowth, aes(x = Time, y = CellCount)) +
+  geom_point(color = "blue", size = 3) +
+  geom_line(data = pred_df, aes(x = time_seq, y = cell_pred), color = "orange", size = 1)
+
+
+```
+
+2. Panel Regression - First Shot
+
+Variable we're really trying to understand is the average price
+
+State: our entity variable
+Year: our time variable
+packpc: our dependent variable
+avgprc: our predictor variable of interest
+
+```{r Panel_Regression}
+
+cigs_panel <- Cigarette %>% 
+  select(state, year, packpc, avgprs)
+
+# Let's examine the relationship b/w price and packs purchased
+
+ggplot(cigs_panel, aes(x = avgprs, y = packpc, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm", aes(color = state), se = FALSE, size = 0.2)
+
+ggplot(cigs_panel, aes(x = year, y = packpc, group = state)) +
+  geom_point(aes(color = state)) +
+  geom_smooth(method = "lm", aes(color = state), se = FALSE, size = 0.2)
+
+```
+
+Entity Fixed Effects model:
+
+```{r EFE_model}
+
+cigs_model <- plm(packpc ~ avgprs,
+                  data = cigs_panel,
+                  index = c("state","year"),
+                  model = "within") # within says do an entity fixed effect model
+
+cigs_model
+
+# Interpretation:
+# For every dollar increment in price of packaging we would expect a 0.32 less packages per person
+# Per capita cigarette purchases will decrease by 0.32
+
+coeftest(cigs_model, vcov. = vcovHC(cigs_model, type = "HC1"))
+
+# SE term is often what people pull out of this.  The Estimate is slightly different.
+
+```
+
+Add time fixed effects:
+
+```{r TFE_model}
+
+et_cigs_model <- plm(packpc ~ avgprs,
+                     data = cigs_panel,
+                     index = c("state","year"),
+                     model = "within",
+                     effect = "twoways")
+
+et_cigs_model
+# coefficient has changed a little bit
+# has including a TFE improved my model?  Let's use an pFtest to check:
+
+pFtest(et_cigs_model, cigs_model) # order counts - more complete model first (time fixed effect model)
+
+```
+
+
+
+
